@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -156,6 +157,88 @@ func (i *LiveStockChainCode) delete(stub shim.ChaincodeStubInterface, args []str
 	}
 
 	return formatSuccess("successfully")
+}
+
+func (c *LiveStockChainCode) QueryFarmTransactionWithPagination(stub shim.ChaincodeStubInterface, args []string) peer.Response {
+
+	//   0
+	// "queryString"
+	if len(args) < 3 {
+		return shim.Error("Incorrect number of arguments. Expecting 3")
+	}
+
+	queryString := args[0]
+	//return type of ParseInt is int64
+	pageSize, err := strconv.ParseInt(args[1], 10, 32)
+	if err != nil {
+		return shim.Error(err.Error())
+	}
+	bookmark := args[2]
+
+	queryResults, err := getQueryResultForQueryStringWithPagination(stub, queryString, int32(pageSize), bookmark)
+	if err != nil {
+		return shim.Error(err.Error())
+	}
+	return shim.Success(queryResults)
+}
+
+func getQueryResultForQueryStringWithPagination(stub shim.ChaincodeStubInterface, queryString string, pageSize int32, bookmark string) ([]byte, error) {
+
+	fmt.Printf("- getQueryResultForQueryString queryString:\n%s\n", queryString)
+
+	resultsIterator, responseMetadata, err := stub.GetQueryResultWithPagination(queryString, pageSize, bookmark)
+	if err != nil {
+		return nil, err
+	}
+	defer resultsIterator.Close()
+
+	buffer, err := constructQueryResponseFromIterator(resultsIterator)
+	if err != nil {
+		return nil, err
+	}
+
+	bufferWithPaginationInfo := addPaginationMetadataToQueryResults(buffer, responseMetadata)
+
+	fmt.Printf("- getQueryResultForQueryString queryResult:\n%s\n", bufferWithPaginationInfo.String())
+
+	return buffer.Bytes(), nil
+}
+
+func constructQueryResponseFromIterator(resultsIterator shim.StateQueryIteratorInterface) (*bytes.Buffer, error) {
+	// buffer is a JSON array containing QueryResults
+	var buffer bytes.Buffer
+	buffer.WriteString("{\"Record\":[")
+	bArrayMemberAlreadyWritten := false
+	for resultsIterator.HasNext() {
+		queryResponse, err := resultsIterator.Next()
+		if err != nil {
+			return nil, err
+		}
+		// Add a comma before array members, suppress it for the first array member
+		if bArrayMemberAlreadyWritten == true {
+			buffer.WriteString(",")
+		}
+		// Record is a JSON object, so we write as-is
+		buffer.WriteString(string(queryResponse.Value))
+		bArrayMemberAlreadyWritten = true
+	}
+	buffer.WriteString("],")
+
+	return &buffer, nil
+}
+
+func addPaginationMetadataToQueryResults(buffer *bytes.Buffer, responseMetadata *peer.QueryResponseMetadata) *bytes.Buffer {
+
+	buffer.WriteString("\"ResponseMetadata\":{\"RecordsCount\":")
+	buffer.WriteString("\"")
+	buffer.WriteString(fmt.Sprintf("%v", responseMetadata.FetchedRecordsCount))
+	buffer.WriteString("\"")
+	buffer.WriteString(", \"Bookmark\":")
+	buffer.WriteString("\"")
+	buffer.WriteString(responseMetadata.Bookmark)
+	buffer.WriteString("\"}}")
+
+	return buffer
 }
 
 func formatError(message string) peer.Response {
